@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# ralph - Main dispatcher for Agent Orchestration tools
+#
+# Usage: ralph <subcommand> [args...]
+#
+# Subcommands:
+#   loop      Iterative agent loop (main tool)
+#   cost      Cost reporting
+#   stats     Session statistics
+#   cleanup   Clean old sessions
+#   models    Show available models
+#   agents    Manage shared agents
+#
+set -euo pipefail
+
+# Set RALPH_ROOT for all subcommands
+RALPH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export RALPH_ROOT
+
+# Standard paths derived from RALPH_ROOT
+export RALPH_CONFIG="$RALPH_ROOT/config/models.json"
+export RALPH_SANDBOX_CONFIG="$RALPH_ROOT/config/sandbox.json"
+export RALPH_STATE_DIR="$RALPH_ROOT/state"
+
+show_help() {
+    cat <<EOF
+ralph - Agent Orchestration tools
+
+Usage: ralph <subcommand> [args...]
+
+Subcommands:
+  loop      Iterative agent loop with rate limit handling
+  cost      Cost reporting and budget tracking
+  stats     Session statistics and history
+  cleanup   Clean old session files
+  models    Show available models and their status
+  agents    Manage shared agent definitions
+
+Options:
+  -h, --help     Show this help
+  --version      Show version
+
+Examples:
+  ralph loop "Implement feature X"
+  ralph loop --file myspec.md
+  ralph models
+  ralph cost --days 7
+  ralph stats --last 5
+  ralph cleanup --days 7 --force
+
+For help on a specific subcommand:
+  ralph <subcommand> --help
+EOF
+}
+
+show_version() {
+    local version
+    version=$(git -C "$RALPH_ROOT" describe --tags --always 2>/dev/null || echo "v0.1.0")
+    echo "ralph $version"
+}
+
+# Handle no args or help flags
+if [[ $# -eq 0 ]]; then
+    show_help
+    exit 0
+fi
+
+case "$1" in
+    -h|--help|help)
+        show_help
+        exit 0
+        ;;
+    --version)
+        show_version
+        exit 0
+        ;;
+esac
+
+# Get subcommand
+SUBCOMMAND="$1"
+shift
+
+# Validate subcommand name (prevent path traversal)
+if [[ ! "$SUBCOMMAND" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: Invalid subcommand name '$SUBCOMMAND'" >&2
+    exit 1
+fi
+
+# Map subcommand to script
+CMD_SCRIPT="$RALPH_ROOT/cmd/${SUBCOMMAND}.sh"
+
+if [[ ! -f "$CMD_SCRIPT" ]]; then
+    echo "Error: Unknown subcommand '$SUBCOMMAND'" >&2
+    echo "Run 'ralph --help' for available subcommands." >&2
+    exit 1
+fi
+
+# Source common library
+source "$RALPH_ROOT/lib/common.sh"
+
+# Execute subcommand (source it to inherit functions)
+source "$CMD_SCRIPT" "$@"

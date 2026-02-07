@@ -1,0 +1,37 @@
+# Cloned repositories (setup-contai will clone these)
+contai/
+
+# Runtime state
+state/
+.ralph/
+setup/.opencode/
+setup/.ralph/
+setup/.claude/
+setup/contai/
+node_modules/
+
+# Test results and outputs
+results/
+
+# Any credential or auth files
+*.env
+env.list
+auth.json
+
+# Sandbox placeholder files (0-byte files created by bwrap/srt)
+.bash_profile
+.bashrc
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc
+*.pfx
+*.pem
+*.key
+*.p12
+gcp-credentials.json
