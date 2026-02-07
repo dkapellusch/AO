@@ -1,0 +1,232 @@
+# Custom container image with opencode and full dev environment
+# Based on contai base image, adds:
+# - OpenCode CLI with authentication plugins
+# - Anthropic sandbox-runtime (srt) for network/filesystem isolation
+# - Chromium and agent-browser for E2E testing
+# - .NET 10 SDK for C# development
+# - Node.js package managers (npm, pnpm, bun, yarn)
+# - Python with uv
+# - Database tools (SQLite, PostgreSQL client)
+# - Build tools for native modules
+
+ARG BASE_IMAGE=contai:latest
+FROM ${BASE_IMAGE}
+
+# Switch to root for installation
+USER root
+
+# ============================================================================
+# SYSTEM PACKAGES - Build tools, databases, and dependencies
+# ============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools for native Node modules (better-sqlite3, etc.)
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    # .NET runtime dependencies (ICU for globalization)
+    libicu-dev \
+    # SQLite database
+    sqlite3 \
+    libsqlite3-dev \
+    # PostgreSQL client tools
+    postgresql-client \
+    libpq-dev \
+    # Chromium and browser automation dependencies
+    chromium \
+    chromium-driver \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libasound2t64 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    xdg-utils \
+    # Utilities
+    wget \
+    unzip \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    # Credential storage (libsecret for keytar/Claude Code)
+    libsecret-1-dev \
+    libsecret-tools \
+    dbus \
+    gnome-keyring \
+    # Sandboxing tools (for srt/sandbox-runtime)
+    bubblewrap \
+    socat \
+    && ldconfig \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# .NET 10 SDK - For C# development and testing
+# ============================================================================
+RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh \
+    && chmod +x dotnet-install.sh \
+    && ./dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet \
+    && rm dotnet-install.sh \
+    && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
+
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH="${PATH}:/usr/share/dotnet:/root/.dotnet/tools"
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV DOTNET_NOLOGO=1
+# Ensure .NET can find ICU libraries
+ENV LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}"
+ENV ICU_DATA="/usr/share/icu"
+
+# Verify .NET works and install common tools
+RUN dotnet --info && dotnet tool install --global dotnet-ef || true
+
+# ============================================================================
+# NODE.JS PACKAGE MANAGERS - npm (already installed), pnpm, bun, yarn
+# ============================================================================
+# Verify Node.js from base image
+RUN node --version && npm --version
+
+# Install pnpm
+RUN npm install -g pnpm
+
+# Install bun
+# Trust: bun.sh - official Bun installer (maintained by Oven)
+# TODO: Pin to specific version with checksum verification
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+# Install yarn
+RUN npm install -g yarn
+
+# ============================================================================
+# CHROMIUM - Environment variables for headless operation
+# ============================================================================
+ENV CHROME_BIN=/usr/bin/chromium-browser \
+    CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --disable-gpu" \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+# ============================================================================
+# AGENT-BROWSER - E2E testing tool
+# ============================================================================
+RUN npm install -g agent-browser && \
+    agent-browser install --skip-download || true
+
+# ============================================================================
+# OPENCODE CLI - AI coding assistant
+# ============================================================================
+RUN mkdir -p /root/.opencode /root/.config/opencode /root/.local/share/opencode
+
+# Trust: opencode.ai - official OpenCode installer
+# TODO: Pin to specific version with checksum verification
+RUN curl -fsSL https://opencode.ai/install | bash
+ENV PATH="/root/.opencode/bin:${PATH}"
+
+# Install opencode plugins for OAuth authentication
+WORKDIR /root/.opencode
+RUN npm init -y 2>/dev/null || true && \
+    npm install opencode-gemini-auth opencode-anthropic-auth@0.0.8 @opencode-ai/plugin
+
+# Create opencode config with auth plugins
+RUN echo '{"$schema":"https://opencode.ai/config.json","plugin":["opencode-gemini-auth","opencode-anthropic-auth"]}' > /root/.config/opencode/opencode.json
+RUN echo '{"$schema":"https://opencode.ai/config.json","plugin":["opencode-gemini-auth","opencode-anthropic-auth"]}' > /root/opencode.json
+
+# ============================================================================
+# CLAUDE CODE CLI - Anthropic's AI coding assistant
+# ============================================================================
+RUN mkdir -p /root/.claude
+
+RUN npm install -g @anthropic-ai/claude-code
+
+# ============================================================================
+# SANDBOX RUNTIME (srt) - Anthropic's sandboxing tool for AI agents
+# Provides network domain filtering and filesystem restrictions via bubblewrap
+# ============================================================================
+RUN npm install -g @anthropic-ai/sandbox-runtime
+
+# Note: When running, mount host's claude config: -v ~/.claude:/root/.claude:ro
+
+# ============================================================================
+# VERIFICATION - Ensure everything is installed correctly
+# ============================================================================
+RUN echo "=== Verifying installations ===" && \
+    echo "Node.js: $(node --version)" && \
+    echo "npm: $(npm --version)" && \
+    echo "pnpm: $(pnpm --version)" && \
+    echo "bun: $(bun --version)" && \
+    echo "yarn: $(yarn --version)" && \
+    echo "Python: $(python3 --version)" && \
+    echo "uv: $(uv --version 2>/dev/null || echo 'not installed')" && \
+    echo ".NET: $(dotnet --version)" && \
+    echo "SQLite: $(sqlite3 --version)" && \
+    echo "PostgreSQL client: $(psql --version)" && \
+    echo "Chromium: $(chromium-browser --version 2>/dev/null || echo 'installed')" && \
+    echo "agent-browser: $(which agent-browser)" && \
+    echo "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')" && \
+    echo "Claude Code: $(claude --version 2>/dev/null || echo 'installed')" && \
+    echo "srt (sandbox-runtime): $(srt --version 2>/dev/null || echo 'installed')" && \
+    echo "bubblewrap: $(bwrap --version 2>/dev/null || echo 'installed')" && \
+    echo "=== All tools installed ==="
+
+# ============================================================================
+# NON-ROOT USER SETUP - Required for Claude Code --dangerously-skip-permissions
+# ============================================================================
+# Security rationale: Running AI agents as root is dangerous. The non-root 'agent'
+# user provides defense-in-depth by limiting the impact of potential agent exploits.
+# Claude Code --dangerously-skip-permissions requires a non-root user.
+
+# Remove SUID/SGID binaries that could enable privilege escalation
+RUN find / -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+
+RUN useradd -m -s /bin/bash -u 1000 agent && \
+    mkdir -p /home/agent/.local/share/opencode /home/agent/.config/opencode /home/agent/.claude /home/agent/.opencode /home/agent/.bun/bin /home/agent/.dotnet/tools && \
+    # Copy opencode installation to agent user
+    cp -r /root/.opencode/* /home/agent/.opencode/ && \
+    cp -r /root/.bun /home/agent/ && \
+    # Copy configs
+    cp /root/.config/opencode/opencode.json /home/agent/.config/opencode/ 2>/dev/null || true && \
+    cp /root/opencode.json /home/agent/ 2>/dev/null || true && \
+    # Copy Claude Code onboarding skip file
+    cp /root/.claude.json /home/agent/.claude.json && \
+    # Fix ownership
+    chown -R agent:agent /home/agent
+
+# Set up PATH for agent user
+ENV PATH="/home/agent/.opencode/bin:/home/agent/.bun/bin:/home/agent/.dotnet/tools:${PATH}"
+
+# ============================================================================
+# WORKSPACE SETUP
+# ============================================================================
+WORKDIR /workspace
+RUN chown agent:agent /workspace
+
+# ============================================================================
+# ENTRYPOINT - Syncs shared agents before running command
+# ============================================================================
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Switch to non-root user
+USER agent
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/bin/bash"]
+
+# Note: When running, mount:
+# - Host's opencode auth: -v ~/.local/share/opencode:/home/agent/.local/share/opencode:ro
+# - Host's opencode config: -v ./opencode-config:/home/agent/.config/opencode
+# - Host's claude auth: -v ~/.claude:/home/agent/.claude:ro
+# - Working directory: -v /path/to/project:/workspace
+# - Shared agents: -v ./agents:/opt/shared-agents:ro

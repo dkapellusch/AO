@@ -1,0 +1,60 @@
+{
+  "agents": {
+    "opencode": {
+      "tiers": {
+        "high": {
+          "models": [
+            "google/gemini-3-pro-preview",
+            "anthropic/claude-opus-4-5"
+          ],
+          "description": "Complex reasoning tasks"
+        },
+        "medium": {
+          "models": [
+            "google/gemini-3-flash-preview",
+            "anthropic/claude-sonnet-4-5"
+          ],
+          "description": "Standard coding tasks"
+        },
+        "low": {
+          "models": [
+            "google/gemini-3-flash-preview",
+            "anthropic/claude-haiku-4-5"
+          ],
+          "description": "Simple/quick tasks"
+        }
+      }
+    },
+    "claudecode": {
+      "tiers": {
+        "high": {
+          "models": ["opus"],
+          "description": "Complex reasoning tasks"
+        },
+        "medium": {
+          "models": ["sonnet"],
+          "description": "Standard coding tasks"
+        },
+        "low": {
+          "models": ["haiku"],
+          "description": "Simple/quick tasks"
+        }
+      }
+    }
+  },
+  "defaults": {
+    "maxRetries": 10,
+    "retryDelaySeconds": 300,
+    "cooldownSeconds": 900,
+    "timeoutSeconds": 1800
+  },
+  "concurrency": {
+    "defaultMaxSlots": 3,
+    "modelLimits": {
+      "anthropic/claude-opus-4-5": 2,
+      "anthropic/claude-sonnet-4-5": 3,
+      "google/gemini-3-pro-preview": 5,
+      "google/gemini-3-flash-preview": 10
+    }
+  }
+}

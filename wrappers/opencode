@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# opencode-wrapped - OpenCode wrapper with rate limiting and sandbox support
+#
+# This wrapper intercepts OpenCode calls and adds:
+# - Rate limit checking and model fallback
+# - Concurrency control for parallel agent spawns
+# - Sandbox routing when enabled
+#
+# Usage: Set PATH to include this directory before real opencode location,
+#        or use GSD_WRAPPER_ENABLED=true to activate wrapping.
+#
+# Environment variables:
+#   GSD_TIER          - Model tier (high/medium/low, default: high)
+#   GSD_SANDBOX       - Enable sandbox (true/false, default: false)
+#   GSD_CONFIG        - Path to config.json
+#   GSD_STATE_DIR     - Path to state directory
+#   GSD_WRAPPER_ENABLED - Set to "true" to enable wrapper (prevents recursion)
+#   GSD_MCP_CONFIG    - Path to MCP config file (Claude format)
+#   GSD_OPENCODE_MCP_CONFIG - Path to converted OpenCode MCP config
+#   GSD_EXTRA_MOUNTS  - Space-separated extra mount paths
+#   CONTAI_IMAGE      - Container image to use
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCHESTRATOR_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Source core libraries
+source "$ORCHESTRATOR_DIR/lib/core.sh"
+source "$ORCHESTRATOR_DIR/lib/model.sh"
+source "$ORCHESTRATOR_DIR/lib/sandbox.sh"
+
+# Configuration from environment
+TIER="${GSD_TIER:-high}"
+SANDBOX="${GSD_SANDBOX:-false}"
+CONFIG="${GSD_CONFIG:-$ORCHESTRATOR_DIR/config.json}"
+STATE_DIR="${GSD_STATE_DIR:-$ORCHESTRATOR_DIR/state}"
+RATE_LIMITS="$STATE_DIR/rate-limits.json"
+MODEL_SLOTS="$STATE_DIR/model-slots.json"
+
+# Initialize state
+init_state_dir "$STATE_DIR" "model-slots.json"
+
+# Load config defaults
+load_config_defaults "$CONFIG"
+COOLDOWN="${DEFAULT_COOLDOWN:-900}"
+
+# Extract model from arguments if specified
+extract_model_from_args() {
+	local model=""
+	local prev=""
+	for arg in "$@"; do
+		if [[ "$prev" == "--model" ]]; then
+			model="$arg"
+			break
+		fi
+		prev="$arg"
+	done
+	echo "$model"
+}
+
+# Get the real opencode binary (skip this wrapper)
+get_real_opencode() {
+	# Find opencode in PATH, excluding this wrapper
+	local wrapper_dir="$SCRIPT_DIR"
+	local IFS=':'
+	for dir in $PATH; do
+		if [[ "$dir" != "$wrapper_dir" ]] && [[ -x "$dir/opencode" ]]; then
+			echo "$dir/opencode"
+			return 0
+		fi
+	done
+
+	# Fallback to common locations
+	if [[ -x "/usr/local/bin/opencode" ]]; then
+		echo "/usr/local/bin/opencode"
+		return 0
+	fi
+	if [[ -x "$HOME/.local/bin/opencode" ]]; then
+		echo "$HOME/.local/bin/opencode"
+		return 0
+	fi
+
+	echo "Error: Could not find real opencode binary" >&2
+	return 1
+}
+
+# Main wrapper logic
+main() {
+	local original_args=("$@")
+	local model
+	model=$(extract_model_from_args "$@")
+
+	# If no model specified, get one from config
+	if [[ -z "$model" ]]; then
+		model=$(get_next_available_model "$TIER" "$CONFIG" "$RATE_LIMITS" "true" "opencode") || {
+			echo "Error: No models available (all rate-limited)" >&2
+			exit 1
+		}
+		# Insert model into args
+		original_args=("run" "--model" "$model" "${original_args[@]:1}")
+	fi
+
+	# Acquire concurrency slot (with 5 minute timeout)
+	local slot_acquired=false
+	if acquire_model_slot "$model" "$CONFIG" "$MODEL_SLOTS" 300; then
+		slot_acquired=true
+	else
+		echo "Warning: Could not acquire model slot, proceeding anyway" >&2
+	fi
+
+	# Cleanup on exit
+	cleanup() {
+		if [[ "$slot_acquired" == "true" ]]; then
+			release_model_slot "$model" "$MODEL_SLOTS"
+		fi
+	}
+	trap cleanup EXIT
+
+	# Check rate limit and switch models if needed
+	if is_model_rate_limited "$model" "$RATE_LIMITS"; then
+		local new_model
+		new_model=$(get_next_available_model "$TIER" "$CONFIG" "$RATE_LIMITS" "true" "opencode") || {
+			echo "Error: Model $model is rate-limited and no alternatives available" >&2
+			exit 1
+		}
+		echo "Note: Model $model is rate-limited, using $new_model instead" >&2
+
+		# Replace model in args
+		local new_args=()
+		local skip_next=false
+		for arg in "${original_args[@]}"; do
+			if [[ "$skip_next" == "true" ]]; then
+				new_args+=("$new_model")
+				skip_next=false
+				continue
+			fi
+			if [[ "$arg" == "--model" ]]; then
+				skip_next=true
+			fi
+			new_args+=("$arg")
+		done
+		original_args=("${new_args[@]}")
+		model="$new_model"
+	fi
+
+	# Get real opencode path
+	local real_opencode
+	real_opencode=$(get_real_opencode) || exit 1
+
+	# Execute with sandbox if enabled
+	local exit_code=0
+	local output_file
+	output_file=$(mktemp)
+
+	if [[ "$SANDBOX" == "true" ]]; then
+		local contai_script="$ORCHESTRATOR_DIR/wrappers/contai-opencode"
+		[[ -f "$contai_script" ]] || contai_script="$ORCHESTRATOR_DIR/contai-opencode"
+		if [[ -f "$contai_script" ]]; then
+			# Build contai arguments from environment
+			local contai_args=()
+			[[ -n "${CONTAI_IMAGE:-}" ]] && contai_args+=(--image "$CONTAI_IMAGE")
+			[[ -n "${GSD_MCP_CONFIG:-}" ]] && contai_args+=(--mcp-config "$GSD_MCP_CONFIG")
+			[[ -n "${GSD_OPENCODE_MCP_CONFIG:-}" ]] && contai_args+=(--opencode-mcp-config "$GSD_OPENCODE_MCP_CONFIG")
+			if [[ -n "${GSD_EXTRA_MOUNTS:-}" ]]; then
+				for mount in $GSD_EXTRA_MOUNTS; do
+					contai_args+=(--extra-mount "$mount")
+				done
+			fi
+			"$contai_script" "${contai_args[@]}" opencode "${original_args[@]}" 2>&1 | tee "$output_file" || exit_code=$?
+		else
+			echo "Warning: Sandbox enabled but contai-opencode not found, running without sandbox" >&2
+			"$real_opencode" "${original_args[@]}" 2>&1 | tee "$output_file" || exit_code=$?
+		fi
+	else
+		"$real_opencode" "${original_args[@]}" 2>&1 | tee "$output_file" || exit_code=$?
+	fi
+
+	# Check for rate limit in output
+	local output
+	output=$(cat "$output_file")
+	rm -f "$output_file"
+
+	if is_rate_limit_error "$output" "$CONFIG"; then
+		echo "Warning: Rate limit detected for $model, marking as rate-limited" >&2
+		mark_model_rate_limited "$model" "$COOLDOWN" "$RATE_LIMITS"
+	fi
+
+	exit $exit_code
+}
+
+# Only run wrapper logic if explicitly enabled AND this is a run command
+# Other commands (session, export, stats, etc.) should pass through
+if [[ "${GSD_WRAPPER_ENABLED:-false}" == "true" ]] && [[ "${1:-}" == "run" ]]; then
+	main "$@"
+else
+	# Pass through to real opencode without wrapping
+	real_opencode=$(get_real_opencode) || exit 1
+	exec "$real_opencode" "$@"
+fi

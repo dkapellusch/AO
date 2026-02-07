@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# gsd-runner - Run GSD with rate limiting, concurrency control, and sandbox support
+#
+# This script sets up the environment so that all agent spawns from GSD
+# go through our infrastructure (opencode-wrapped).
+#
+# Usage: gsd-runner [OPTIONS] <gsd-command>
+#
+# Examples:
+#   gsd-runner /gsd:new-project
+#   gsd-runner --sandbox --tier medium /gsd:plan-phase 1
+#   gsd-runner /gsd:execute-phase 1
+
+set -euo pipefail
+
+# Initialize variables before trap registration to avoid unbound variable errors
+TEMP_DOCKERFILE=""
+OPENCODE_MCP_CONFIG_FILE=""
+
+# Cleanup function for temp files
+cleanup() {
+	# TEMP_DOCKERFILE is cleaned inline after use, but handle it here for early exits
+	[[ -n "$TEMP_DOCKERFILE" ]] && rm -f "$TEMP_DOCKERFILE" 2>/dev/null
+	[[ -n "$OPENCODE_MCP_CONFIG_FILE" ]] && rm -f "$OPENCODE_MCP_CONFIG_FILE" 2>/dev/null
+}
+trap cleanup EXIT
+
+# Color support (respecting NO_COLOR)
+if [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 1 ]]; then
+	RED="" GREEN="" YELLOW="" BLUE="" RESET=""
+else
+	RED=$'\033[0;31m' GREEN=$'\033[0;32m' YELLOW=$'\033[0;33m' BLUE=$'\033[0;34m' RESET=$'\033[0m'
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCHESTRATOR_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Source libraries for utility functions
+source "$ORCHESTRATOR_DIR/lib/core.sh"
+source "$ORCHESTRATOR_DIR/lib/sandbox.sh"
+source "$ORCHESTRATOR_DIR/lib/model.sh"
+source "$ORCHESTRATOR_DIR/lib/agents.sh"
+source "$ORCHESTRATOR_DIR/lib/cost.sh"
+
+# Defaults
+TIER="high"
+SANDBOX=false
+WORKING_DIR="$(pwd)"
+AGENT="opencode"
+MODEL=""
+MCP_CONFIG=""
+BUILD_CONTAINER=""
+EXTRA_ALLOW_WRITE=()
+CONTAINER_IMAGE="contai-opencode:latest"
+# TEMP_DOCKERFILE and OPENCODE_MCP_CONFIG_FILE are initialized before trap registration
+
+usage() {
+	cat <<EOF
+Usage: gsd-runner [OPTIONS] <gsd-command>
+
+Run GSD commands with rate limiting, concurrency control, and optional sandbox.
+
+Options:
+  --tier TIER           Model tier: high, medium, low (default: high)
+  --model MODEL         Specific model (overrides --tier)
+  --sandbox             Run in Docker sandbox (contai)
+  --dir DIR             Working directory (default: current)
+  --agent AGENT         Agent runtime: opencode, claudecode (default: opencode)
+  --mcp-config PATH     Load MCP servers from JSON config file
+  --build-container [PATH]  Build project-specific container from Dockerfile
+  --allow-write PATH    Add path to allowed write list (can repeat)
+  -h, --help            Show this help
+
+GSD Commands:
+  /gsd:new-project        Start new project
+  /gsd:map-codebase       Analyze existing codebase
+  /gsd:discuss-phase [N]  Capture implementation decisions
+  /gsd:plan-phase [N]     Research + plan + verify
+  /gsd:execute-phase <N>  Execute tasks in parallel
+  /gsd:verify-work [N]    User acceptance testing
+  /gsd:progress           Show current status
+  /gsd:quick              Execute ad-hoc task
+  /gsd:debug [desc]       Systematic debugging
+  /gsd:help               Show all GSD commands
+
+Examples:
+  gsd-runner /gsd:new-project
+  gsd-runner --sandbox --tier medium /gsd:plan-phase 1
+  gsd-runner --dir /path/to/project /gsd:execute-phase 1
+EOF
+}
+
+# Parse arguments
+GSD_ARGS=()
+while [[ $# -gt 0 ]]; do
+	case $1 in
+		--tier) TIER="$2"; shift 2 ;;
+		--model) MODEL="$2"; shift 2 ;;
+		--sandbox) SANDBOX=true; shift ;;
+		--dir) WORKING_DIR="$2"; shift 2 ;;
+		--agent) AGENT="$2"; shift 2 ;;
+		--mcp-config)
+			MCP_CONFIG="$2"
+			if [[ ! -f "$MCP_CONFIG" ]]; then
+				echo "Error: MCP config file not found: $MCP_CONFIG"
+				exit 1
+			fi
+			MCP_CONFIG="$(cd "$(dirname "$MCP_CONFIG")" && pwd)/$(basename "$MCP_CONFIG")"
+			shift 2
+			;;
+		--build-container)
+			if [[ -n "${2:-}" ]] && [[ ! "$2" =~ ^- ]]; then
+				BUILD_CONTAINER="$2"
+				shift 2
+			else
+				BUILD_CONTAINER="auto"
+				shift
+			fi
+			;;
+		--allow-write) EXTRA_ALLOW_WRITE+=("$2"); shift 2 ;;
+		-h|--help) usage; exit 0 ;;
+		/gsd:*) GSD_ARGS+=("$1"); shift ;;
+		*) GSD_ARGS+=("$1"); shift ;;
+	esac
+done
+
+# Validate we have a GSD command
+if [[ ${#GSD_ARGS[@]} -eq 0 ]]; then
+	echo "Error: No GSD command provided"
+	echo ""
+	usage
+	exit 1
+fi
+
+# Check sandbox prerequisites if enabled
+if [[ "$SANDBOX" == "true" ]]; then
+	CONTAI_SCRIPT="$ORCHESTRATOR_DIR/wrappers/contai-opencode"
+	check_sandbox_setup "$CONTAI_SCRIPT" || exit 1
+fi
+
+# Build project-specific container if requested
+if [[ -n "$BUILD_CONTAINER" ]]; then
+	DOCKERFILE_PATH=""
+
+	if [[ "$BUILD_CONTAINER" == "auto" ]]; then
+		for candidate in "$WORKING_DIR/Dockerfile.ralph" "$WORKING_DIR/.ralph/Dockerfile" "$WORKING_DIR/Dockerfile"; do
+			if [[ -f "$candidate" ]]; then
+				DOCKERFILE_PATH="$candidate"
+				break
+			fi
+		done
+		if [[ -z "$DOCKERFILE_PATH" ]]; then
+			echo "Error: --build-container specified but no Dockerfile found"
+			exit 1
+		fi
+	else
+		DOCKERFILE_PATH="$BUILD_CONTAINER"
+		if [[ ! -f "$DOCKERFILE_PATH" ]]; then
+			echo "Error: Dockerfile not found: $DOCKERFILE_PATH"
+			exit 1
+		fi
+	fi
+
+	PROJECT_NAME=$(basename "$WORKING_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')
+	CONTAINER_IMAGE="contai-${PROJECT_NAME}:latest"
+
+	echo "Building project container: $CONTAINER_IMAGE"
+
+	if grep -q "^FROM contai-opencode" "$DOCKERFILE_PATH"; then
+		docker build -f "$DOCKERFILE_PATH" -t "$CONTAINER_IMAGE" "$WORKING_DIR" || exit 1
+	else
+		TEMP_DOCKERFILE=$(mktemp)
+		cat > "$TEMP_DOCKERFILE" <<DOCKERFILE_EOF
+FROM contai-opencode:latest
+$(grep -v "^FROM " "$DOCKERFILE_PATH" | grep -v "^#" || true)
+DOCKERFILE_EOF
+		docker build -f "$TEMP_DOCKERFILE" -t "$CONTAINER_IMAGE" "$WORKING_DIR" || { rm -f "$TEMP_DOCKERFILE"; exit 1; }
+		rm -f "$TEMP_DOCKERFILE"
+	fi
+	echo ""
+fi
+
+# Handle MCP config conversion for OpenCode
+OPENCODE_MCP_CONFIG_FILE=""
+if [[ "$AGENT" == "opencode" ]] && [[ -n "$MCP_CONFIG" ]]; then
+	source "$ORCHESTRATOR_DIR/lib/mcp-convert.sh"
+	OPENCODE_MCP_CONFIG_FILE=$(mktemp -t "opencode-mcp-XXXXXX.json")
+	create_opencode_mcp_config "$MCP_CONFIG" "$OPENCODE_MCP_CONFIG_FILE"
+fi
+
+# Ensure state directory exists
+init_state_dir "$ORCHESTRATOR_DIR/state" "model-slots.json"
+
+echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║                           GSD Runner                            ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+# Select model if not explicitly provided
+CONFIG_FILE="$ORCHESTRATOR_DIR/config/models.json"
+RATE_LIMITS_FILE="$ORCHESTRATOR_DIR/state/rate-limits.json"
+
+# Ensure rate-limits file exists
+if [[ ! -f "$RATE_LIMITS_FILE" ]]; then
+	mkdir -p "$(dirname "$RATE_LIMITS_FILE")"
+	echo '{}' > "$RATE_LIMITS_FILE"
+fi
+
+if [[ -z "$MODEL" ]]; then
+	MODEL=$(get_next_available_model "$TIER" "$CONFIG_FILE" "$RATE_LIMITS_FILE" true "$AGENT")
+	if [[ -z "$MODEL" ]]; then
+		echo "Error: No available models for tier '$TIER'" >&2
+		exit 1
+	fi
+fi
+
+echo "Tier:      $TIER"
+echo "Model:     $MODEL"
+echo "Sandbox:   $SANDBOX"
+echo "Directory: $WORKING_DIR"
+echo "Agent:     $AGENT"
+[[ -n "$MCP_CONFIG" ]] && echo "MCP:       $MCP_CONFIG"
+[[ -n "$BUILD_CONTAINER" ]] && echo "Container: $CONTAINER_IMAGE"
+echo "Command:   ${GSD_ARGS[*]}"
+echo ""
+
+# Export environment for opencode-wrapped
+export GSD_TIER="$TIER"
+export GSD_SANDBOX="$SANDBOX"
+export GSD_CONFIG="$ORCHESTRATOR_DIR/config/models.json"
+export GSD_STATE_DIR="$ORCHESTRATOR_DIR/state"
+export GSD_WRAPPER_ENABLED="true"
+export CONTAI_IMAGE="$CONTAINER_IMAGE"
+[[ -n "$MCP_CONFIG" ]] && export GSD_MCP_CONFIG="$MCP_CONFIG"
+[[ -n "$OPENCODE_MCP_CONFIG_FILE" ]] && export GSD_OPENCODE_MCP_CONFIG="$OPENCODE_MCP_CONFIG_FILE"
+if [[ ${#EXTRA_ALLOW_WRITE[@]} -gt 0 ]]; then
+	export GSD_EXTRA_MOUNTS="${EXTRA_ALLOW_WRITE[*]}"
+fi
+
+# Prepend our wrapper to PATH so GSD's agent spawns go through it
+export PATH="$ORCHESTRATOR_DIR/wrappers:$PATH"
+
+# Change to working directory
+cd "$WORKING_DIR"
+
+# Ensure shared agents are available in working directory
+ensure_agents "$WORKING_DIR" >/dev/null 2>&1
+
+echo "Starting GSD..."
+echo "════════════════════════════════════════════════════════════════════"
+echo ""
+
+# Build the prompt from GSD_ARGS
+GSD_PROMPT="${GSD_ARGS[*]}"
+
+# Generate a session ID for cost tracking
+GSD_SESSION_ID="gsd-$(date +%Y%m%d-%H%M%S)-$$"
+
+# Capture sessions before running (for diffing after)
+SESSIONS_BEFORE=""
+if [[ "$AGENT" == "opencode" ]]; then
+	SESSIONS_BEFORE=$(opencode session list 2>/dev/null | tail -n +3 | awk '{print $1}' | sort)
+fi
+
+# Run GSD command through the appropriate agent
+EXIT_CODE=0
+if [[ "$AGENT" == "claudecode" ]]; then
+	# Claude Code - map model name
+	claude_model="$MODEL"
+	case "$MODEL" in
+		*opus*) claude_model="opus" ;;
+		*sonnet*) claude_model="sonnet" ;;
+		*haiku*) claude_model="haiku" ;;
+	esac
+
+	# Build Claude Code flags (skip permissions by default for autonomous operation)
+	CLAUDE_FLAGS=("-p" "--dangerously-skip-permissions" "--model" "$claude_model")
+
+	if [[ "$SANDBOX" == "true" ]]; then
+		"$CONTAI_SCRIPT" --dir "$WORKING_DIR" claude "${CLAUDE_FLAGS[@]}" "$GSD_PROMPT" || EXIT_CODE=$?
+	else
+		claude "${CLAUDE_FLAGS[@]}" "$GSD_PROMPT" || EXIT_CODE=$?
+	fi
+else
+	# OpenCode (default)
+	if [[ "$SANDBOX" == "true" ]]; then
+		"$CONTAI_SCRIPT" --dir "$WORKING_DIR" opencode run --model "$MODEL" --agent yolo "$GSD_PROMPT" || EXIT_CODE=$?
+	else
+		opencode run --model "$MODEL" --agent yolo "$GSD_PROMPT" || EXIT_CODE=$?
+	fi
+fi
+
+# Cost tracking (only for opencode agent)
+if [[ "$AGENT" == "opencode" ]]; then
+	echo ""
+	echo "════════════════════════════════════════════════════════════════════"
+	echo "GSD Cost Summary"
+	echo "────────────────────────────────────────────────────────────────────"
+
+	# Find new OpenCode sessions created during this run
+	SESSIONS_AFTER=$(opencode session list 2>/dev/null | tail -n +3 | awk '{print $1}' | sort)
+	NEW_SESSIONS=$(comm -13 <(echo "$SESSIONS_BEFORE") <(echo "$SESSIONS_AFTER"))
+
+	TOTAL_COST=0
+	SESSION_COUNT=0
+
+	if [[ -n "$NEW_SESSIONS" ]]; then
+		while read -r session_id; do
+			[[ -z "$session_id" ]] && continue
+			cost=$(get_opencode_session_cost "$session_id")
+			TOTAL_COST=$(awk -v t="$TOTAL_COST" -v c="${cost:-0}" 'BEGIN {print t + c}')
+			SESSION_COUNT=$((SESSION_COUNT + 1))
+		done <<< "$NEW_SESSIONS"
+
+		printf "Sessions: %d\n" "$SESSION_COUNT"
+		printf "Total Cost: \$%.4f\n" "$TOTAL_COST"
+
+		# Record to global ledger
+		record_to_ledger "$GSD_SESSION_ID" "$GSD_PROMPT" "$TOTAL_COST" "$WORKING_DIR" "$MODEL"
+		echo "Recorded to cost ledger: $GSD_SESSION_ID"
+	else
+		echo "No OpenCode sessions detected (sandbox may not report sessions)"
+	fi
+	echo ""
+fi
+
+exit $EXIT_CODE
