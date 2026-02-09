@@ -2734,7 +2734,7 @@ End of output"
 # =============================================
 echo ""
 echo "============================================="
-echo "Test Results"
+echo "Unit Test Results"
 echo "============================================="
 echo -e "Total:   $TOTAL"
 echo -e "${GREEN}Passed:  $PASSED${NC}"
@@ -2744,6 +2744,28 @@ if [[ $FAILED -gt 0 ]]; then
 else
 	echo -e "Failed:  $FAILED"
 	echo ""
-	echo -e "${GREEN}All tests passed!${NC}"
+	echo -e "${GREEN}All unit tests passed!${NC}"
+fi
+
+# =============================================
+# Integration tests (optional)
+# =============================================
+if [[ -z "${SKIP_INTEGRATION_TESTS:-}" ]]; then
+	echo ""
+	echo "============================================="
+	echo "Running integration tests..."
+	echo "============================================="
+	if "$SCRIPT_DIR/integration-tests.sh"; then
+		echo ""
+		echo -e "${GREEN}All tests passed (unit + integration)!${NC}"
+		exit 0
+	else
+		echo ""
+		echo -e "${RED}Integration tests failed.${NC}"
+		exit 1
+	fi
+else
+	echo ""
+	echo -e "${YELLOW}Skipping integration tests (SKIP_INTEGRATION_TESTS=1)${NC}"
 	exit 0
 fi
