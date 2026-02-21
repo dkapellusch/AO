@@ -134,20 +134,25 @@ try_browser_passwords() {
     local result
     result=$(python3 "$py_script" "$DOMAIN" 2>/dev/null) || return 1
 
-    local error
-    error=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null)
+    # Parse all fields in one python3 call (NUL-delimited to handle special chars)
+    local parsed
+    parsed=$(printf '%s' "$result" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d.get('error',''), d.get('username',''), d.get('password',''), d.get('browser',''), sep='\0')
+" 2>/dev/null) || return 1
+
+    local error username browser
+    IFS=$'\0' read -r error username CRED_PASSWORD browser <<< "$parsed"
+
     if [ -n "$error" ]; then
         log "$error"
         return 1
     fi
 
-    CRED_USERNAME=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('username',''))" 2>/dev/null)
-    CRED_PASSWORD=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('password',''))" 2>/dev/null)
-
     if [ -n "$CRED_PASSWORD" ]; then
+        CRED_USERNAME="$username"
         CRED_METHOD="browser_passwords"
-        local browser
-        browser=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('browser',''))" 2>/dev/null)
         log "Found credentials in $browser password manager"
         return 0
     fi
@@ -174,9 +179,9 @@ try_env() {
     local token_var="${domain_upper}_TOKEN"
 
     local token_val user_val pass_val
-    eval "token_val=\"\${$token_var:-}\""
-    eval "user_val=\"\${$user_var:-}\""
-    eval "pass_val=\"\${$pass_var:-}\""
+    token_val="${!token_var:-}"
+    user_val="${!user_var:-}"
+    pass_val="${!pass_var:-}"
 
     if [ -n "$token_val" ]; then
         CRED_PASSWORD="$token_val"
@@ -365,7 +370,14 @@ if acquire_credentials; then
     log "=== Credentials Acquired ==="
     log "Method: $CRED_METHOD"
     [ -n "$CRED_USERNAME" ] && log "Username: $CRED_USERNAME"
-    [ -n "$CRED_PASSWORD" ] && log "Password: ****${CRED_PASSWORD: -4}"
+    if [ -n "$CRED_PASSWORD" ]; then
+        local pw_len=${#CRED_PASSWORD}
+        if [ "$pw_len" -gt 4 ]; then
+            log "Password: ****${CRED_PASSWORD: -4}"
+        else
+            log "Password: [set, ${pw_len} chars]"
+        fi
+    fi
     [ -n "$CRED_HEADERS" ] && log "Headers available: CRED_HEADERS"
     [ -n "$SESSION_FILE" ] && [ -f "$SESSION_FILE" ] && log "Session: $SESSION_FILE"
     echo ""

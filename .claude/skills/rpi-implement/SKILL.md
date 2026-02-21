@@ -1,6 +1,6 @@
 ---
 name: rpi-implement
-description: Implement a feature from a plan using sub-agent decomposition — reads the plan (defaults to ai-docs/{branchName}/prd.md), decomposes into outside-in implementation phases, dispatches a fresh team per phase (external integrations → services → endpoints → UI → E2E). Each phase implements AND tests before the next begins. Use after research and plan phases are complete.
+description: Implement a feature from a plan using sub-agent decomposition — reads the plan (defaults to ai-docs/{branchName}/spec.md), decomposes into outside-in implementation phases, dispatches a fresh team per phase (external integrations → services → endpoints → UI → E2E). Each phase implements AND tests before the next begins. Use after research and plan phases are complete.
 ---
 
 # /rpi-implement — Plan-Driven Implementation
@@ -85,16 +85,16 @@ Each role operates independently with its own context. The TL routes outputs bet
 **`$ARGUMENTS`**: Path to the plan file.
 
 ```bash
-/rpi-implement "ai-docs/my-feature/prd.md"
-/rpi-implement                              # defaults to ai-docs/{branchName}/prd.md
+/rpi-implement "ai-docs/my-feature/spec.md"
+/rpi-implement                              # defaults to ai-docs/{branchName}/spec.md
 ```
 
 **Default**: If `$ARGUMENTS` is empty:
 ```bash
 BRANCH=$(git branch --show-current)
-PLAN_PATH="ai-docs/${BRANCH}/prd.md"
+PLAN_PATH="ai-docs/${BRANCH}/spec.md"
 ```
-- **If `BRANCH` is empty** (detached HEAD): error with `"Detached HEAD detected — cannot resolve default plan path. Pass the path explicitly: /rpi-implement ai-docs/your-branch/prd.md"` — **STOP**.
+- **If `BRANCH` is empty** (detached HEAD): error with `"Detached HEAD detected — cannot resolve default plan path. Pass the path explicitly: /rpi-implement ai-docs/your-branch/spec.md"` — **STOP**.
 - If the default path doesn't exist, error with: `"No plan found at ${PLAN_PATH}. Pass the path explicitly: /rpi-implement <path>"` — **STOP**.
 
 ---
@@ -229,6 +229,7 @@ Use the **Agent Prompt Boilerplate** from `rpi-common.md` for every role prompt.
 - **Phase assignment**: This phase's plan section (what to implement, which files, which ACs)
 - **Previous phases proved**: Summary + file paths from earlier phases
 - **Pattern file**: Path to similar existing component
+- **AC handoff**: If `{output_dir}/acs.md` exists, read it as the authoritative AC list — do not re-extract from spec.md. Each phase logs which AC IDs it addresses.
 
 ### Team Mode (TeamCreate available)
 

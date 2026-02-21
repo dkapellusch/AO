@@ -46,39 +46,34 @@ process.stdin.on("end", () => {
     const interrupts = readInterrupts(sessionId);
     const struggles = detectStruggles(lines, interrupts);
 
+    const pendingDir = path.join(os.homedir(), ".claude", "rpi-learn-pending");
+    fs.mkdirSync(pendingDir, { recursive: true });
+
     if (struggles.hasStruggles) {
       fs.writeFileSync(stateFile, "");
-      const toolList = [...struggles.errorTools].join(", ") || "unknown";
-      const interruptDetail = interrupts.count > 0
-        ? `${interrupts.count} user interrupts (Esc) on tools: ${[...interrupts.tools].join(", ")}. `
-        : "";
-      const reason = [
-        `Session struggle analysis: ${struggles.errorCount} tool errors, `,
-        `${struggles.retryClusterCount} retry clusters, `,
-        `${struggles.rejectionCount} user rejections, `,
-        `${interruptDetail}`,
-        `Struggled tools: ${toolList}. `,
-        `Use the Task tool (with run_in_background: true) to spawn a general-purpose subagent that: `,
-        `(1) reads the full transcript at ${transcriptPath}, `,
-        `(2) identifies the specific workflows/tools that caused trouble, `,
-        `(3) pays special attention to user interrupts — the user hit Escape to stop Claude, which signals the approach was wrong or taking too long, `,
-        `(4) suggests creating a skill (SKILL.md) for any workflow that took >3 attempts, `,
-        `(5) captures debugging insights into memory via /rpi-learn patterns. `,
-        `Present findings to the user before writing anything.`,
-      ].join("");
-
-      const output = JSON.stringify({
-        decision: "block",
-        reason,
-        systemMessage:
-          "Session struggle detected \u2014 analyzing for skill opportunities",
-      });
-      process.stdout.write(output + "\n");
+      const pendingFile = path.join(pendingDir, `${sessionId}.json`);
+      fs.writeFileSync(pendingFile, JSON.stringify({
+        sessionId,
+        transcriptPath,
+        timestamp: new Date().toISOString(),
+        type: "struggles",
+        errorCount: struggles.errorCount,
+        retryClusterCount: struggles.retryClusterCount,
+        rejectionCount: struggles.rejectionCount,
+        interruptCount: interrupts.count,
+        interruptTools: [...interrupts.tools],
+        errorTools: [...struggles.errorTools],
+      }, null, 2));
     } else if (userMessageCount >= THRESHOLD) {
       fs.writeFileSync(stateFile, "");
-      process.stderr.write(
-        `Reminder: This was a substantial session (${userMessageCount} user messages). Consider running /rpi-learn to capture learnings.\n`
-      );
+      const pendingFile = path.join(pendingDir, `${sessionId}.json`);
+      fs.writeFileSync(pendingFile, JSON.stringify({
+        sessionId,
+        transcriptPath,
+        timestamp: new Date().toISOString(),
+        type: "long-session",
+        userMessageCount,
+      }, null, 2));
     }
   } catch {
     process.exit(0);

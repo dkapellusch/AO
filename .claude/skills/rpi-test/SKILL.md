@@ -58,16 +58,16 @@ your specification. Read it, verify against it, dispatch agents, and report back
 **`$ARGUMENTS`**: Path to the plan file.
 
 ```bash
-/rpi-test "ai-docs/my-feature/prd.md"
-/rpi-test                              # defaults to ai-docs/{branchName}/prd.md
+/rpi-test "ai-docs/my-feature/spec.md"
+/rpi-test                              # defaults to ai-docs/{branchName}/spec.md
 ```
 
 **Default**: If `$ARGUMENTS` is empty:
 ```bash
 BRANCH=$(git branch --show-current)
-PLAN_PATH="ai-docs/${BRANCH}/prd.md"
+PLAN_PATH="ai-docs/${BRANCH}/spec.md"
 ```
-- **If `BRANCH` is empty** (detached HEAD): error with `"Detached HEAD detected — cannot resolve default plan path. Pass the path explicitly: /rpi-test ai-docs/your-branch/prd.md"` — **STOP**.
+- **If `BRANCH` is empty** (detached HEAD): error with `"Detached HEAD detected — cannot resolve default plan path. Pass the path explicitly: /rpi-test ai-docs/your-branch/spec.md"` — **STOP**.
 - If the default path doesn't exist, error with: `"No plan found at ${PLAN_PATH}. Pass the path explicitly: /rpi-test <path>"` — **STOP**.
 
 ---
@@ -83,8 +83,12 @@ Task: "Extract PRD requirements" | general-purpose
 Prompt: |
   You are extracting every verifiable requirement from the PRD.
 
-  1. Read the plan file completely: {plan file path}
-  2. Read CLAUDE.md / README.md in the project root for test conventions
+  1. First check for `{output_dir}/acs.md`. If it exists, read it as the canonical AC list —
+     skip re-extraction from spec.md for AC IDs and test mappings. Only read spec.md for
+     context not covered in acs.md (e.g. implementation notes, configuration details).
+     Return the structured AC list directly from acs.md.
+  2. If acs.md does NOT exist: read the plan file completely: {plan file path}
+  3. Read CLAUDE.md / README.md in the project root for test conventions
 
   Extract and return:
   - ALL acceptance criteria (AC-N) with exact text
@@ -286,7 +290,7 @@ If `pre_test_findings` contains any critical issues (files missing, DI not regis
 
 ### Write Testing Plan to Disk
 
-After the agent returns (and after any quality gate fixes), the **orchestrator** writes the testing plan to `ai-docs/{branchname}/testing.md`. This file lives alongside `research.md` and `prd.md` as a durable artifact of what was tested and what the results were.
+After the agent returns (and after any quality gate fixes), the **orchestrator** writes the testing plan to `ai-docs/{branchname}/testing.md`. This file lives alongside `research.md` and `spec.md` as a durable artifact of what was tested and what the results were.
 
 **Format** — every test case gets an unchecked checkbox. Phase 6 will update these in-place as tests are executed:
 
@@ -827,7 +831,7 @@ Remaining Issues:
 | Testing plan & results | `ai-docs/{branchname}/testing.md` | Living test document — checkboxes, pass/fail results, evidence for every test case. Updated in-place during Phase 6 execution. |
 | Final report | Terminal output (above) | Summary for stakeholders — flags, verdicts, remaining issues. |
 
-The `testing.md` file is the primary audit trail. It sits alongside `research.md` and `prd.md` in `ai-docs/{branchname}/` as the test verification artifact for this feature.
+The `testing.md` file is the primary audit trail. It sits alongside `research.md` and `spec.md` in `ai-docs/{branchname}/` as the test verification artifact for this feature.
 
 ---
 

@@ -51,7 +51,7 @@ Each skill declares its own default output path in its SKILL.md. The pattern abo
 Priority order (highest to lowest):
 1. **Project CLAUDE.md / README.md** — non-negotiable conventions, test structure, code style
 2. **Research document** (`ai-docs/{branch}/research.md`) — what exists today, how the codebase works
-3. **PRD / Plan** (`ai-docs/{branch}/prd.md`) — what we're building and why
+3. **PRD / Plan** (`ai-docs/{branch}/spec.md`) — what we're building and why
 4. **Skill instructions** — how to orchestrate the work
 
 Every agent MUST read these files before writing any code or making decisions:

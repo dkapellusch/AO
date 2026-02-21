@@ -41,6 +41,7 @@ description: "Create a pull request for the current branch. Use when the user sa
 
 ```bash
 REPO_ROOT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+[[ -n "$REPO_ROOT" ]] || { echo "Error: could not determine repo root" >&2; exit 1; }
 CURRENT_BRANCH="$(git branch --show-current)"
 ```
 

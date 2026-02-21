@@ -95,14 +95,13 @@ if [ -z "$PASSWORD" ]; then
 fi
 
 if security find-generic-password -s "$SERVICE_NAME" -a "$USERNAME" &>/dev/null; then
-    if [ "$UPDATE_MODE" = true ]; then
-        security delete-generic-password -s "$SERVICE_NAME" -a "$USERNAME" &>/dev/null || true
-    else
+    if [ "$UPDATE_MODE" != true ]; then
         log "Credential already exists. Use --update to replace."
         exit 1
     fi
 fi
 
+# -U updates atomically if the entry exists; no separate delete needed
 security add-generic-password \
     -a "$USERNAME" \
     -s "$SERVICE_NAME" \

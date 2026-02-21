@@ -19,6 +19,23 @@ export RALPH_ROOT
 
 # Standard paths derived from RALPH_ROOT
 export RALPH_CONFIG="$RALPH_ROOT/config/models.json"
+
+# Merge user config (~/.ao/config.json) if present — user keys override base
+_USER_CONFIG="$HOME/.ao/config.json"
+if [[ -f "$_USER_CONFIG" ]]; then
+    _MERGED=$(mktemp)
+    jq -s '.[0] * .[1]' "$RALPH_CONFIG" "$_USER_CONFIG" > "$_MERGED"
+    export RALPH_CONFIG="$_MERGED"
+fi
+
+# Merge project config (.ao/config.json in CWD) if present — project keys override user
+_PROJECT_CONFIG="$PWD/.ao/config.json"
+if [[ -f "$_PROJECT_CONFIG" ]]; then
+    _MERGED2=$(mktemp)
+    jq -s '.[0] * .[1]' "$RALPH_CONFIG" "$_PROJECT_CONFIG" > "$_MERGED2"
+    export RALPH_CONFIG="$_MERGED2"
+fi
+
 export RALPH_SANDBOX_CONFIG="$RALPH_ROOT/config/sandbox.json"
 export RALPH_STATE_DIR="$RALPH_ROOT/state"
 
@@ -29,12 +46,13 @@ ralph - Agent Orchestration tools
 Usage: ralph <subcommand> [args...]
 
 Subcommands:
-  loop      Iterative agent loop with rate limit handling
-  cost      Cost reporting and budget tracking
-  stats     Session statistics and history
-  cleanup   Clean old session files
-  models    Show available models and their status
-  agents    Manage shared agent definitions
+  loop        Iterative agent loop with rate limit handling
+  cost        Cost reporting and budget tracking
+  stats       Session statistics and history
+  cleanup     Clean old session files
+  models      Show available models and their status
+  agents      Manage shared agent definitions
+  dump-config Print the resolved config (base + user + project overrides)
 
 Options:
   -h, --help     Show this help
@@ -83,6 +101,12 @@ esac
 # Get subcommand
 SUBCOMMAND="$1"
 shift
+
+# Built-in: dump-config prints the resolved config (base + user + project overrides)
+if [[ "$SUBCOMMAND" == "dump-config" ]]; then
+    cat "$RALPH_CONFIG"
+    exit 0
+fi
 
 # Validate subcommand name (prevent path traversal)
 if [[ ! "$SUBCOMMAND" =~ ^[a-zA-Z0-9_-]+$ ]]; then

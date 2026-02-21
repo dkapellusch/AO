@@ -5,9 +5,7 @@ description: Research and document a codebase area as-is using role-differentiat
 
 # /rpi-research — Consensus-Based Codebase Research
 
-**Announce at start:** "I'm using the rpi-research skill to investigate this area."
-
-Document what exists. Only accept what multiple agents agree on or what you can verify against source code. The output is a factual map of the codebase — not suggestions, not improvements, not critiques.
+Document what exists. Only accept what multiple agents agree on or what you can verify against source code. The output is a factual map of the codebase, documentation or web search results — not suggestions, not improvements, not implementation options. We're focused on documenting ground truth.
 
 **Shared conventions**: See [`rpi-common.md`](../rpi-common.md) for path resolution, critical rules, walkthrough protocol, and consensus patterns used across all RPI skills.
 
@@ -19,29 +17,6 @@ Document what exists. Only accept what multiple agents agree on or what you can 
 - **Consensus threshold**: >= 80% consensus rate required (see `rpi-common.md` for calculation)
 
 ---
-
-## Input
-
-**`$ARGUMENTS`**: A task description, area of code, or specific question to investigate. Optionally includes flags.
-
-```bash
-/rpi-research "the Health feature"
-/rpi-research "how does the Slack tool registration pipeline work"
-/rpi-research "the conversation WebSocket flow" --output docs/websocket-research.md
-/rpi-research "the Snowflake query pipeline" --external
-/rpi-research "Jira integration" --external --output docs/jira-research.md
-```
-
-If `$ARGUMENTS` is empty: error with usage example. **STOP.**
-
-### Flags
-
-| Flag | Effect |
-|------|--------|
-| `--output <path>` | Override default output path |
-| `--external` | Launch 2 additional haiku agents for web research (library docs, API contracts, version compatibility) |
-
-Strip all flags from `$ARGUMENTS` before parsing the research question.
 
 ### Output Path
 

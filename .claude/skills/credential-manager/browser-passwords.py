@@ -57,7 +57,8 @@ BROWSER_KEYCHAIN_SERVICES = {
     "chromium": ("Chromium Safe Storage", "Chromium"),
 }
 
-SESSION_APPROVALS_FILE = Path(tempfile.gettempdir()) / "credential-manager-approvals.json"
+SESSION_APPROVALS_DIR = Path.home() / ".credential-manager"
+SESSION_APPROVALS_FILE = SESSION_APPROVALS_DIR / "approvals.json"
 
 _memory_approvals: dict[str, bool] = {}
 
@@ -81,7 +82,9 @@ def save_session_approval(domain: str, approved: bool) -> None:
     approvals = get_session_approvals()
     approvals[domain] = approved
 
-    with open(SESSION_APPROVALS_FILE, 'w') as f:
+    SESSION_APPROVALS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(SESSION_APPROVALS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
         json.dump({
             "session_pid": os.getppid(),
             "approvals": approvals
@@ -249,6 +252,7 @@ def extract_passwords(domain: str | None = None, list_domains: bool = False, req
             continue
 
         for login_data_path in find_profile_paths(base_path):
+            tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
                     tmp_path = tmp.name
@@ -258,40 +262,41 @@ def extract_passwords(domain: str | None = None, list_domains: bool = False, req
                 conn = sqlite3.connect(tmp_path)
                 cursor = conn.cursor()
 
-                if list_domains:
-                    cursor.execute(
-                        "SELECT DISTINCT origin_url FROM logins WHERE blacklisted_by_user = 0"
-                    )
-                    for row in cursor.fetchall():
-                        url = row[0]
-                        results.append({"url": url, "browser": browser})
-                elif domain:
-                    cursor.execute(
-                        "SELECT origin_url, username_value, password_value FROM logins "
-                        "WHERE blacklisted_by_user = 0 AND origin_url LIKE ?",
-                        (f"%{domain}%",)
-                    )
-                    for row in cursor.fetchall():
-                        url, username, encrypted_password = row
-                        password = decrypt_password(encrypted_password, key)
-                        if password and username:
-                            if require_approval:
-                                if not prompt_user_approval(domain, username, browser):
-                                    continue
-                            results.append({
-                                "url": url,
-                                "username": username,
-                                "password": password,
-                                "browser": browser
-                            })
+                try:
+                    if list_domains:
+                        cursor.execute(
+                            "SELECT DISTINCT origin_url FROM logins WHERE blacklisted_by_user = 0"
+                        )
+                        for row in cursor.fetchall():
+                            url = row[0]
+                            results.append({"url": url, "browser": browser})
+                    elif domain:
+                        cursor.execute(
+                            "SELECT origin_url, username_value, password_value FROM logins "
+                            "WHERE blacklisted_by_user = 0 AND origin_url LIKE ?",
+                            (f"%{domain}%",)
+                        )
+                        for row in cursor.fetchall():
+                            url, username, encrypted_password = row
+                            password = decrypt_password(encrypted_password, key)
+                            if password and username:
+                                if require_approval:
+                                    if not prompt_user_approval(domain, username, browser):
+                                        continue
+                                results.append({
+                                    "url": url,
+                                    "username": username,
+                                    "password": password,
+                                    "browser": browser
+                                })
+                finally:
+                    conn.close()
 
-                conn.close()
-                os.unlink(tmp_path)
-
-            except Exception as e:
-                if 'tmp_path' in locals() and os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+            except Exception:
                 continue
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
 
     return results
 

@@ -61,6 +61,7 @@ fi
 
 # Always resolve to the MAIN repo root, even when inside a worktree
 REPO_ROOT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+[[ -n "$REPO_ROOT" ]] || { echo "Error: could not determine repo root" >&2; exit 1; }
 WORKTREE_PATH="$REPO_ROOT/worktrees/$SLUG"
 BRANCH_NAME="${BRANCH_OVERRIDE:-feature/$SLUG}"
 

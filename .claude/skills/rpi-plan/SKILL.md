@@ -541,6 +541,34 @@ One paragraph: what we gained and what we gave up in the synthesis.
 - [ ] {Anything unresolved after synthesis}
 ```
 
+After writing `{output_file}`, also write `{output_dir}/acs.md` — the canonical AC handoff file for downstream phases. Use the requirements table and test matrix from the spec. Format:
+
+```markdown
+# Acceptance Criteria: {feature title}
+
+**Branch**: {branchname}
+**PRD**: {output_file}
+**Updated**: {date}
+
+## Summary Table
+
+| AC ID | Requirement | Priority | MT Tests | IT Tests | UT Tests |
+|-------|-------------|----------|----------|----------|----------|
+| AC-1  | When X then Y | Must | MT-1 | IT-1 | UT-1 |
+
+## Detail
+
+### AC-1: {requirement text}
+- **Priority**: Must/Should/Could
+- **Manual tests**: MT-1 — {description}
+- **Integration tests**: IT-1 — {description}
+- **Unit tests**: UT-1 — {description}
+- **Infrastructure needed**: {list or "None"}
+- **Risk areas**: {list or "None"}
+```
+
+Each requirement row from the Requirements table becomes one AC-N entry. Map the test IDs from the Test Matrix. This file is the single source of truth for AC IDs and test mappings across all downstream phases (implement, test, review).
+
 ---
 
 ## Phase 6: Guided Walkthrough

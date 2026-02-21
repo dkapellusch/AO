@@ -11,6 +11,7 @@ Worktrees are ALWAYS created at the **main repository root**, never nested insid
 ```bash
 # Always resolves to the main repo root, even when running inside a worktree
 REPO_ROOT="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+[[ -n "$REPO_ROOT" ]] || { echo "Error: could not determine repo root" >&2; exit 1; }
 WORKTREES_DIR="$REPO_ROOT/worktrees"
 ```
 

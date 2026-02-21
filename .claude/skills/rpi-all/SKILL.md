@@ -55,7 +55,8 @@ This policy does NOT apply to Phases 6-9 (automation loop) — those agents are 
 > 2. CLAUDE.md in affected feature folders (if they exist)
 > 3. README.md at the repository root
 > 4. Research document: `{output_dir}/research.md` (if it exists at this phase)
-> 5. PRD: `{output_dir}/prd.md` (if it exists at this phase)
+> 5. PRD: `{output_dir}/spec.md` (if it exists at this phase)
+> 6. AC handoff: `{output_dir}/acs.md` (if it exists) — canonical acceptance criteria list; use as the authoritative AC source instead of re-extracting from spec.md
 >
 > **CLAUDE.md conventions are the HIGHEST AUTHORITY.** If a skill instruction
 > conflicts with a CLAUDE.md convention (test structure, code style, naming,
@@ -286,7 +287,7 @@ Prompt:
   - Any open questions
 ```
 
-When the agent returns, confirm `{output_dir}/prd.md` exists.
+When the agent returns, confirm `{output_dir}/spec.md` exists.
 
 ---
 
@@ -296,7 +297,7 @@ When the agent returns, confirm `{output_dir}/prd.md` exists.
 
 ### 5a: Read the PRD
 
-Before presenting anything to the user, **you must read `{output_dir}/prd.md` yourself.** Understand the requirements, acceptance criteria, architecture decisions, and implementation approach. You cannot present a meaningful walkthrough if you haven't read the artifact. This also lets you verify the plan agent produced a real PRD — not a skeleton or placeholder.
+Before presenting anything to the user, **you must read `{output_dir}/spec.md` yourself.** Understand the requirements, acceptance criteria, architecture decisions, and implementation approach. You cannot present a meaningful walkthrough if you haven't read the artifact. This also lets you verify the plan agent produced a real PRD — not a skeleton or placeholder.
 
 ### 5b: Verify Walkthrough Data
 
@@ -366,7 +367,7 @@ If any corrections were collected in 5c-5e:
 When no corrections remain (or after iterations exhausted):
 ```
 AskUserQuestion:
-  "Final PRD is ready: `{output_dir}/prd.md`. Approve for implementation?"
+  "Final PRD is ready: `{output_dir}/spec.md`. Approve for implementation?"
   Options: "Approved — proceed to implementation" / "Needs more changes"
 ```
 
@@ -395,12 +396,12 @@ Task: "RPI Implement" | subagent_type: general-purpose
 Prompt:
   CONTEXT LOADING (do this FIRST, before invoking the skill):
   Read and internalize: CLAUDE.md (repo root + feature folders), README.md,
-  {output_dir}/research.md, {output_dir}/prd.md. These define non-negotiable
+  {output_dir}/research.md, {output_dir}/spec.md. These define non-negotiable
   project conventions for test structure, code style, naming, and architecture.
   CLAUDE.md OVERRIDES skill instructions.
 
   You are running the full /rpi-implement skill. Use the Skill tool to invoke it:
-    Skill: "rpi-implement", args: "{output_dir}/prd.md"
+    Skill: "rpi-implement", args: "{output_dir}/spec.md"
 
   Follow the skill's orchestration, but CLAUDE.md conventions take precedence
   when they conflict.
@@ -435,12 +436,12 @@ Task: "RPI Cleanup" | subagent_type: general-purpose
 Prompt:
   CONTEXT LOADING (do this FIRST, before invoking the skill):
   Read and internalize: CLAUDE.md (repo root + feature folders), README.md,
-  {output_dir}/research.md, {output_dir}/prd.md. These define non-negotiable
+  {output_dir}/research.md, {output_dir}/spec.md. These define non-negotiable
   project conventions for test structure, code style, naming, and architecture.
   CLAUDE.md OVERRIDES skill instructions.
 
   You are running the full /rpi-cleanup skill. Use the Skill tool to invoke it:
-    Skill: "rpi-cleanup", args: "{output_dir}/prd.md"
+    Skill: "rpi-cleanup", args: "{output_dir}/spec.md"
 
   Follow the skill's orchestration, but CLAUDE.md conventions take precedence.
   Do NOT ask the user for fix approval — apply all safe fixes autonomously.
@@ -462,12 +463,12 @@ Task: "RPI Test" | subagent_type: general-purpose
 Prompt:
   CONTEXT LOADING (do this FIRST, before invoking the skill):
   Read and internalize: CLAUDE.md (repo root + feature folders), README.md,
-  {output_dir}/research.md, {output_dir}/prd.md. These define non-negotiable
+  {output_dir}/research.md, {output_dir}/spec.md. These define non-negotiable
   project conventions for test structure, code style, naming, and architecture.
   CLAUDE.md OVERRIDES skill instructions.
 
   You are running the full /rpi-test skill. Use the Skill tool to invoke it:
-    Skill: "rpi-test", args: "{output_dir}/prd.md"
+    Skill: "rpi-test", args: "{output_dir}/spec.md"
 
   Follow the skill's orchestration, but CLAUDE.md conventions take precedence.
 
@@ -501,7 +502,7 @@ Task: "RPI Review" | subagent_type: general-purpose
 Prompt:
   CONTEXT LOADING (do this FIRST, before invoking the skill):
   Read and internalize: CLAUDE.md (repo root + feature folders), README.md,
-  {output_dir}/research.md, {output_dir}/prd.md. These define non-negotiable
+  {output_dir}/research.md, {output_dir}/spec.md. These define non-negotiable
   project conventions for test structure, code style, naming, and architecture.
   CLAUDE.md OVERRIDES skill instructions.
 
@@ -564,7 +565,7 @@ Summarize the completed workflow:
 
 Workflow Summary:
   Research:    ✅ {output_dir}/research.md
-  Plan:        ✅ {output_dir}/prd.md
+  Plan:        ✅ {output_dir}/spec.md
   Implement:   ✅ {N} phases, {M} files changed
   Cleanup:     ✅ {N} issues fixed
   Tests:       ✅ {total} total, {passed} passing, {coverage}% AC coverage
@@ -597,7 +598,7 @@ Task: "RPI Retro" | subagent_type: general-purpose
 Prompt:
   CONTEXT LOADING (do this FIRST, before invoking the skill):
   Read and internalize: CLAUDE.md (repo root + feature folders), README.md,
-  {output_dir}/research.md, {output_dir}/prd.md. These define non-negotiable
+  {output_dir}/research.md, {output_dir}/spec.md. These define non-negotiable
   project conventions. CLAUDE.md OVERRIDES skill instructions.
 
   You are running the full /rpi-retro skill. Use the Skill tool to invoke it:

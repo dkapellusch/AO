@@ -52,19 +52,37 @@ Review the full conversation history. Build a raw list of candidate learnings.
 
 ### Pre-Scan: Check Struggle History
 
-Before scanning the conversation, check for a hook-generated learnings file:
+Before scanning the conversation, check for hook-generated pending learning files:
 
-1. Get branch name: `git branch --show-current`
-2. Check if `ai-docs/{branchName}/learnings.md` exists
-3. If it exists, read it. Each entry contains:
-   - Timestamp and session ID
-   - Transcript path (for deep-diving into specific sessions)
-   - Struggle classification (tool-errors, retry-clusters, user-rejections, user-corrections)
-   - Metrics table with counts and struggled tool names
+```bash
+ls ~/.claude/rpi-learn-pending/ 2>/dev/null
+```
 
-Use this as a **prioritization signal**: sessions flagged with struggles are higher-value targets for learning extraction. The classifications tell you WHERE to look — e.g., "retry-clusters (3 clusters)" means agents repeated the same tool call without progress; "user-rejections (4 rejections)" means the user had to cancel agent actions.
+Each `.json` file corresponds to a session that crossed a struggle or length threshold. Read any that exist. The format is:
 
-If transcript paths are listed, dispatch a background agent to read and summarize the flagged transcripts. Cross-reference what the hook detected with what actually happened — the hook's heuristics are coarse (e.g., 3 sequential `Read` calls count as a "retry cluster" even when they're normal), so validate before treating metrics as ground truth.
+```json
+{
+  "sessionId": "...",
+  "transcriptPath": "/Users/.../.claude/projects/.../abc123.jsonl",
+  "timestamp": "...",
+  "type": "struggles",          // or "long-session"
+  "errorCount": 0,
+  "retryClusterCount": 3,
+  "rejectionCount": 0,
+  "interruptCount": 0,
+  "interruptTools": [],
+  "errorTools": []
+}
+```
+
+Use these as a **prioritization signal**: sessions with `type: "struggles"` are higher-value targets. The counts tell you WHERE to look — e.g., `retryClusterCount: 3` means the agent repeated the same tool call without progress; `interruptCount > 0` means the user hit Escape (approach was wrong or too slow).
+
+If `transcriptPath` is listed, dispatch a background agent to read and summarize the flagged transcripts. Cross-reference what the hook detected with what actually happened — the hook's heuristics are coarse (e.g., 3 sequential `Read` calls count as a "retry cluster" even when they're normal), so validate before treating metrics as ground truth.
+
+After processing, delete the pending files you've consumed:
+```bash
+rm ~/.claude/rpi-learn-pending/{sessionId}.json
+```
 
 ### What to Look For
 

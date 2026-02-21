@@ -133,15 +133,36 @@ Write each session timeline to `ai-docs/{branchname}/retro/session-timelines.md`
 
 ### 1d: Check Hook-Generated Struggle History
 
-Check if `ai-docs/{branchname}/learnings.md` exists. This file is auto-populated by the `suggest-learn.js` stop hook whenever a session crosses struggle thresholds (tool errors, retry clusters, user rejections, user corrections).
+Check for pending learning files written by the `suggest-learn.js` stop hook:
 
-If it exists:
-1. Read it. Each entry has a timestamp, session ID, transcript path, classification, and metrics table.
-2. **Cross-reference with session files from 1b.** Match session IDs from `learnings.md` to the JSONL files you discovered. Flag matched sessions as "hook-flagged" — these get priority analysis from the team in Phase 2.
-3. **Include the struggle classifications in the workflow context.** When assembling `workflow-context.md`, add a section listing which sessions the hook flagged and why. This gives the analysis agents a head start — they know which sessions to scrutinize.
-4. **Validate, don't trust blindly.** The hook's heuristics are coarse — e.g., 3 sequential `Read` calls trigger a "retry cluster" even when they're normal file scanning. The analysis agents should confirm whether flagged struggles were genuine.
+```bash
+ls ~/.claude/rpi-learn-pending/ 2>/dev/null
+```
 
-If it doesn't exist, proceed normally — the hook only writes when thresholds are crossed.
+The hook silently writes a `.json` file per session whenever it crosses struggle or length thresholds (tool errors, retry clusters, user rejections, user interrupts). Each file looks like:
+
+```json
+{
+  "sessionId": "...",
+  "transcriptPath": "/Users/.../.claude/projects/.../abc123.jsonl",
+  "timestamp": "...",
+  "type": "struggles",          // or "long-session"
+  "errorCount": 0,
+  "retryClusterCount": 3,
+  "rejectionCount": 0,
+  "interruptCount": 0,
+  "interruptTools": [],
+  "errorTools": []
+}
+```
+
+If any pending files exist:
+1. Read them all. Match `sessionId` values to the JSONL files discovered in 1b. Flag matched sessions as "hook-flagged" — these get priority analysis from the team in Phase 2.
+2. **Include the struggle classifications in the workflow context.** When assembling `workflow-context.md`, add a section listing which sessions the hook flagged and why. This gives the analysis agents a head start — they know which sessions to scrutinize.
+3. **Validate, don't trust blindly.** The hook's heuristics are coarse — e.g., 3 sequential `Read` calls trigger a "retry cluster" even when they're normal file scanning. The analysis agents should confirm whether flagged struggles were genuine.
+4. After consuming them, delete the pending files: `rm ~/.claude/rpi-learn-pending/{sessionId}.json`
+
+If no pending files exist, proceed normally — the hook only writes when thresholds are crossed.
 
 ### 1e: Inventory Branch Artifacts
 
