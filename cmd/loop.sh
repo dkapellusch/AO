@@ -750,7 +750,8 @@ init_state() {
         --argjson minIterations "$MIN_ITERATIONS" \
         --arg completionPromise "$COMPLETION_PROMISE" \
         --arg startedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-        '{active: true, iteration: 1, model: $model, maxIterations: $maxIterations,
+        --argjson pid "$$" \
+        '{active: true, pid: $pid, iteration: 1, model: $model, maxIterations: $maxIterations,
           minIterations: $minIterations, completionPromise: $completionPromise,
           startedAt: $startedAt}' > "$STATE_FILE"; then
         echo "Error: Failed to initialize state file" >&2
@@ -819,7 +820,7 @@ check_struggle() {
 
 check_completion_marker() {
     local output_file=$1
-    grep -qF "<promise>${COMPLETION_PROMISE}</promise>" "$output_file"
+    tail -20 "$output_file" | grep -qxF "<promise>${COMPLETION_PROMISE}</promise>"
 }
 
 run_validation_agent() {
@@ -877,9 +878,8 @@ EOF
         local validator_model
         validator_model=$(get_available_model "$TIER")
         if [[ -z "$validator_model" ]]; then
-            echo "   Warning: No models available for validation, skipping validation check" >&2
-            # Return success to avoid false negatives when models are rate-limited
-            return 0
+            echo "   Warning: Validation skipped — no models available" >&2
+            return 2
         fi
         validator_output=$(opencode run --model "$validator_model" --agent yolo "$validation_prompt" < /dev/null 2>&1) || true
         validator_exit_code=$?
@@ -927,6 +927,12 @@ check_completion() {
             local original_prompt
             original_prompt=$(get_prompt_content)
             run_validation_agent "$original_prompt" ""
+            local val_exit=$?
+            if [[ $val_exit -eq 2 ]]; then
+                echo "   Validation unavailable, deferring completion" >&2
+                return 1
+            fi
+            return $val_exit
             ;;
         *)
             return 0
@@ -973,6 +979,7 @@ cleanup() {
     [[ -n "$TEMP_SANDBOX_CONFIG" ]] && rm -f "$TEMP_SANDBOX_CONFIG"
     [[ -n "${OPENCODE_MCP_CONFIG_FILE:-}" ]] && rm -f "$OPENCODE_MCP_CONFIG_FILE"
     rm -f "$RALPH_DIR/validator-feedback.md" 2>/dev/null
+    rm -f "$RALPH_DIR"/prompt-iter-*.txt 2>/dev/null
     rm -f "$RALPH_DIR/agent_exit_code.tmp" 2>/dev/null
 
     clear_state
@@ -1086,11 +1093,17 @@ if [[ -f "$STATE_FILE" ]]; then
     acquire_lock "$STATE_FILE" || { echo "Error: Could not acquire session lock" >&2; exit 1; }
     active=$(jq -r '.active // false' "$STATE_FILE")
     if [[ "$active" == "true" ]]; then
-        release_lock "$STATE_FILE"
-        echo "Error: Session '$SESSION_ID' is already active" >&2
-        echo "Use --status --session $SESSION_ID to check" >&2
-        echo "Or delete $STATE_FILE to reset" >&2
-        exit 1
+        stored_pid=$(jq -r '.pid // ""' "$STATE_FILE")
+        if [[ -n "$stored_pid" ]] && ! kill -0 "$stored_pid" 2>/dev/null; then
+            echo "Warning: Previous session PID $stored_pid is gone. Auto-recovering." >&2
+            jq '.active = false' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+        else
+            release_lock "$STATE_FILE"
+            echo "Error: Session '$SESSION_ID' is already active (PID ${stored_pid:-unknown})" >&2
+            echo "Use --status --session $SESSION_ID to check" >&2
+            echo "Or delete $STATE_FILE to reset" >&2
+            exit 1
+        fi
     fi
     # Set active=true while still holding the lock to prevent race condition
     jq '.active = true' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
@@ -1195,6 +1208,8 @@ while [[ $MAX_ITERATIONS -eq 0 ]] || [[ $iteration -le $MAX_ITERATIONS ]]; do
         rm -f "$RALPH_DIR/state.md"
         # Reset history (struggle indicators, iteration timings)
         jq -n '{iterations: [], totalDurationMs: 0, struggleIndicators: {repeatedErrors: {}, noProgressIterations: 0, shortIterations: 0}}' > "$HISTORY_FILE"
+        # Clean up prompt-iter files that accumulated since last reset
+        rm -f "$RALPH_DIR"/prompt-iter-*.txt
     fi
 
     SNAPSHOT_BEFORE=$(mktemp)
@@ -1369,6 +1384,13 @@ while [[ $MAX_ITERATIONS -eq 0 ]] || [[ $iteration -le $MAX_ITERATIONS ]]; do
     fi
     CMD_PID=""
 
+    # In brief mode, show last 30 lines of output on non-zero exit to aid debugging
+    if [[ "$exit_code" -ne 0 ]] && [[ "$OUTPUT_MODE" == "brief" ]]; then
+        echo "--- Agent output (last 30 lines) ---" >&2
+        tail -30 "$OUTPUT_FILE" >&2
+        echo "--- End agent output ---" >&2
+    fi
+
     end_time=$(date +%s)
     duration_ms=$(( (end_time - start_time) * 1000 ))
 
@@ -1506,15 +1528,8 @@ while [[ $MAX_ITERATIONS -eq 0 ]] || [[ $iteration -le $MAX_ITERATIONS ]]; do
     fi
 
     if [[ "$STALLED" == "true" ]]; then
-        echo "Marking model as temporarily unavailable..."
-        mark_rate_limited "$MODEL"
-        NEW_MODEL=$(get_available_model "$TIER") || { echo "Error: No models available"; clear_state; exit 1; }
-        if [[ "$NEW_MODEL" != "$MODEL" ]]; then
-            MODEL="$NEW_MODEL"
-            echo "Switched to: $MODEL"
-        else
-            echo "No alternative model available, will retry with same model next iteration"
-        fi
+        echo "Agent stalled (no output for ${STALL_TIMEOUT}s). Retrying same model..." >&2
+        sleep 5
         continue
     fi
 
